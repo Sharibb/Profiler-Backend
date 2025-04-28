@@ -1,0 +1,32 @@
+{
+  "name": "sigh-core-api",
+  "version": "1.0.0",
+  "description": "Contains core functionality of sigh like login payment etc",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "npm start",
+    "setup-db": "node setup-db.js",
+    "update-schema": "node update-schema.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.9.0",
+    "bcryptjs": "^3.0.2",
+    "body-parser": "^1.20.3",
+    "connect-pg-simple": "^10.0.0",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "google-search-results-nodejs": "^2.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.15.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
