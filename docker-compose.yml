@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    restart: on-failure
+    ports:
+      - "3002:3002"
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@db:5432/deuss_db
+      - NODE_ENV=development
+      - JWT_SECRET=change_this_in_production
+      - SESSION_SECRET=change_this_in_production
+      - COOKIE_DOMAIN=localhost
+      - PORT=3002
+      - PGSSLMODE=disable
+    depends_on:
+      - db
+    volumes:
+      - ./:/usr/src/app
+      - /usr/src/app/node_modules
+    
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=deuss_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    command: postgres -c ssl=off
+
+volumes:
+  postgres_data:
