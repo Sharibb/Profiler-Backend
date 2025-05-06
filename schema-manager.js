@@ -11,10 +11,14 @@ if (!process.env.DATABASE_URL) {
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
 });
+
+// Only enable SSL in production
+if (process.env.NODE_ENV === 'production' && process.env.PGSSLMODE !== 'disable') {
+  pool.ssl = {
+    rejectUnauthorized: false
+  };
+}
 
 // Default bookmark categories to populate
 const DEFAULT_CATEGORIES = [

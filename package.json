@@ -8,7 +8,7 @@
     "dev": "nodemon index.js",
     "test": "npm start",
     "setup-db": "node setup-db.js",
-    "update-schema": "node update-schema.js"
+    "update-schema": "node schema-manager.js --all && node index.js"
   },
   "author": "",
   "license": "ISC",
@@ -24,7 +24,8 @@
     "express-session": "^1.18.1",
     "google-search-results-nodejs": "^2.1.0",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.15.6"
+    "pg": "^8.15.6",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

@@ -9,24 +9,32 @@ const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
-const EventEmitter = require('events');
+
+//const EventEmitter = require('events');
 
 // PostgreSQL Configuration
-const pool = new Pool({
+const poolConfig = {
   connectionString: process.env.DATABASE_URL,
-    ssl: {
-    rejectUnauthorized: false
-  },
   // Connection pool settings
   max: 10, // Maximum number of clients
   idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
   connectionTimeoutMillis: 5000, // Connection timeout after 5 seconds
   maxUses: 7500, // Close connection after it has been used this many times
-});
+};
 
+// Only enable SSL in production
+if (process.env.NODE_ENV === 'production' && process.env.PGSSLMODE !== 'disable') {
+  poolConfig.ssl = {
+    rejectUnauthorized: false
+  };
+}
+
+console.log(`Database SSL mode: ${poolConfig.ssl ? 'enabled' : 'disabled'}`);
+
+const pool = new Pool(poolConfig);
 // Set the search path for all queries
 pool.on('connect', (client) => {
-  client.query('SET search_path TO sigh_ai');
+  client.query('SET search_path TO deuss');
 });
 
 // Test database connection
@@ -34,13 +42,13 @@ pool.connect((err, client, release) => {
   if (err) {
     console.error('Error connecting to the database:', err);
   } else {
-    console.log('Successfully connected to PostgreSQL database');
+    // Successfully connected to PostgreSQL database
     
     // First, explicitly check if the session table exists
     client.query(`
       SELECT EXISTS (
         SELECT FROM pg_tables 
-        WHERE schemaname = 'sigh_ai' 
+        WHERE schemaname = 'deuss' 
         AND tablename = 'session'
       )
     `, (err, result) => {
@@ -51,12 +59,11 @@ pool.connect((err, client, release) => {
       }
       
       const tableExists = result.rows[0].exists;
-      console.log(`Session table exists in sigh_ai schema: ${tableExists}`);
       
       if (!tableExists) {
-        // Create session table if it doesn't exist in the sigh_ai schema
+        // Create session table if it doesn't exist in the deuss schema
         client.query(`
-          CREATE TABLE IF NOT EXISTS sigh_ai.session (
+          CREATE TABLE IF NOT EXISTS deuss.session (
             sid VARCHAR NOT NULL,
             sess JSON NOT NULL,
             expire TIMESTAMP(6) NOT NULL
@@ -74,7 +81,7 @@ pool.connect((err, client, release) => {
               IF NOT EXISTS (
                 SELECT 1 FROM pg_constraint WHERE conname = 'session_pkey'
               ) THEN
-                ALTER TABLE sigh_ai.session ADD CONSTRAINT session_pkey PRIMARY KEY (sid);
+                ALTER TABLE deuss.session ADD CONSTRAINT session_pkey PRIMARY KEY (sid);
               END IF;
             END$$;
           `, (err) => {
@@ -84,23 +91,18 @@ pool.connect((err, client, release) => {
               return;
             }
             
-            console.log('Session table and primary key set up successfully');
-            
             // Create index on expire
             client.query(`
-              CREATE INDEX IF NOT EXISTS idx_session_expire ON sigh_ai.session (expire);
+              CREATE INDEX IF NOT EXISTS idx_session_expire ON deuss.session (expire);
             `, (err) => {
               if (err) {
                 console.error('Error creating expire index:', err);
-              } else {
-                console.log('Session expire index created or already exists');
               }
               release();
             });
           });
         });
       } else {
-        console.log('Using existing session table in sigh_ai schema');
         release();
       }
     });
@@ -178,11 +180,10 @@ app.use(cors({
 const initSessionStore = async () => {
   try {
     // First try: Use connect-pg-simple with the correct schema and table name
-    console.log('Initializing PostgreSQL session store...');
     return new pgSession({
       pool,
       tableName: 'session',  // Table name without schema prefix
-      schemaName: 'sigh_ai', // Schema name
+      schemaName: 'deuss', // Schema name
       createTableIfMissing: false,
       errorLog: (error) => {
         console.error('Session store error:', error);
@@ -196,10 +197,9 @@ const initSessionStore = async () => {
     
     try {
       // Second try: Use connect-pg-simple with fully-qualified name but no schema param
-      console.log('Attempting fallback #1: Using fully qualified table name...');
       return new pgSession({
         pool,
-        tableName: 'sigh_ai.session', // Fully qualified table name
+        tableName: 'deuss.session', // Fully qualified table name
         createTableIfMissing: false
       });
     } catch (secondaryError) {
@@ -218,7 +218,6 @@ let sessionStore;
 (async () => {
   try {
     sessionStore = await initSessionStore();
-    console.log('Session store initialized successfully');
     
     // Attach error handler if supported
     if (sessionStore.on) {
@@ -226,7 +225,6 @@ let sessionStore;
         console.error('Session store error event:', error);
         // Attempt to reconnect if possible
         if (typeof sessionStore.connect === 'function') {
-          console.log('Attempting to reconnect session store...');
           setTimeout(() => {
             try {
               sessionStore.connect();
@@ -242,8 +240,6 @@ let sessionStore;
     const cookieDomain = process.env.NODE_ENV === 'production' 
       ? process.env.COOKIE_DOMAIN || '.sigh-ai.com' // Use cookie domain for production 
       : undefined; // No domain for localhost
-    
-    console.log(`Using cookie domain: ${cookieDomain || 'none (localhost)'}`);
     
     // Initialize session middleware with the store with improved cookie settings
     const sessionConfig = {
@@ -269,8 +265,6 @@ let sessionStore;
     if (process.env.NODE_ENV !== 'production') {
       sessionConfig.cookie.secure = false;
     }
-    
-    console.log('Session cookie configuration:', sessionConfig.cookie);
     
     app.use(session(sessionConfig));
     
@@ -413,7 +407,6 @@ const loginRequired = (req, res, next) => {
   
   if (req.session?.uid) {
     userId = req.session.uid;
-    console.log(`Authentication via session for user ${userId}`);
     next();
     return;
   }
@@ -426,7 +419,6 @@ const loginRequired = (req, res, next) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
       if (decoded && decoded.id) {
         userId = decoded.id;
-        console.log(`Authentication via JWT for user ${userId}`);
         
         // Set user info on request
         req.user = decoded;
@@ -441,8 +433,6 @@ const loginRequired = (req, res, next) => {
             req.session.save((err) => {
               if (err) {
                 console.error('Error saving session from JWT:', err);
-              } else {
-                console.log(`Created session from JWT for user ${userId}`);
               }
             });
           }
@@ -467,7 +457,6 @@ const loginRequired = (req, res, next) => {
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
         if (decoded && decoded.id) {
           userId = decoded.id;
-          console.log(`Authentication via cookie JWT for user ${userId}`);
           
           // Set user info on request
           req.user = decoded;
@@ -482,8 +471,6 @@ const loginRequired = (req, res, next) => {
               req.session.save((err) => {
                 if (err) {
                   console.error('Error saving session from cookie JWT:', err);
-                } else {
-                  console.log(`Created session from cookie JWT for user ${userId}`);
                 }
               });
             }
@@ -516,7 +503,7 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     // Check if user already exists
     const userExists = await pool.query(
-      'SELECT * FROM sigh_ai.users WHERE email = $1',
+      'SELECT * FROM deuss.users WHERE email = $1',
       [email]
     );
 
@@ -530,7 +517,7 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Create user
     const result = await pool.query(
-      'INSERT INTO sigh_ai.users (email, password, full_name, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING id, email, full_name',
+      'INSERT INTO deuss.users (email, password, full_name, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING id, email, full_name',
       [email, hashedPassword, fullName]
     );
 
@@ -561,7 +548,7 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     // Get user
     const result = await pool.query(
-      'SELECT * FROM sigh_ai.users WHERE email = $1',
+      'SELECT * FROM deuss.users WHERE email = $1',
       [email]
     );
 
@@ -621,8 +608,6 @@ app.post('/api/auth/login', async (req, res) => {
         req.session.uid = user.id;
         sessionID = req.sessionID;
         
-        console.log(`Setting session for user ${user.id} with session ID ${sessionID}`);
-        
         // Test that the session is working by reading back the value we just set
         if (req.session.uid !== user.id) {
           console.warn('Session appears to be non-functional - value not persisted');
@@ -636,8 +621,6 @@ app.post('/api/auth/login', async (req, res) => {
               if (err) {
                 console.error('Error saving session:', err);
                 sessionStatus = 'error-saving';
-              } else {
-                console.log('Session saved successfully');
               }
               resolve();
             });
@@ -698,6 +681,411 @@ app.post('/api/auth/logout', loginRequired, (req, res) => {
   });
 });
 
+// Bookmarks Routes
+app.get('/api/bookmarks', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Check if default bookmarks have been added for this user
+    const userResult = await pool.query(
+      'SELECT default_bookmarks_added FROM deuss.users WHERE id = $1',
+      [userId]
+    );
+    
+    const defaultBookmarksAdded = userResult.rows[0]?.default_bookmarks_added || false;
+    
+    // If default bookmarks haven't been added yet, add them
+    if (!defaultBookmarksAdded) {
+      await addDefaultBookmarksForUser(userId);
+    }
+
+    // Get bookmark categories
+    const categoriesResult = await pool.query(
+      'SELECT * FROM deuss.bookmark_categories WHERE user_id = $1 ORDER BY id',
+      [userId]
+    );
+
+    // Get bookmarks
+    const bookmarksResult = await pool.query(
+      'SELECT * FROM deuss.bookmarks WHERE user_id = $1 ORDER BY id',
+      [userId]
+    );
+
+    // Group bookmarks by category
+    const categoriesWithBookmarks = categoriesResult.rows.map(category => ({
+      ...category,
+      bookmarks: bookmarksResult.rows.filter(bookmark => bookmark.category_id === category.id)
+    }));
+
+    res.json({
+      categories: categoriesWithBookmarks,
+      bookmarks: bookmarksResult.rows
+    });
+
+  } catch (error) {
+    console.error('Error fetching bookmarks:', error);
+    res.status(500).json({
+      error: 'Failed to fetch bookmarks',
+      message: error.message,
+      bookmarks: []
+    });
+  }
+});
+
+// Add a new bookmark
+app.post('/api/bookmarks', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { title, url, category_id, color } = req.body;
+
+    if (!title || !url || !category_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Convert category_id to integer
+    const categoryIdInt = parseInt(category_id, 10);
+    
+    if (isNaN(categoryIdInt)) {
+      return res.status(400).json({ 
+        error: 'Invalid category ID',
+        details: 'Category ID must be a valid integer'
+      });
+    }
+
+    // Validate that the category belongs to the user
+    const categoryCheck = await pool.query(
+      'SELECT id FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+      [categoryIdInt, userId]
+    );
+
+    if (categoryCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Category not found or does not belong to user' });
+    }
+
+    // Insert the bookmark
+    const result = await pool.query(
+      'INSERT INTO deuss.bookmarks (user_id, category_id, title, url, color, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) RETURNING *',
+      [userId, categoryIdInt, title, url, color]
+    );
+
+    res.status(201).json({ 
+      message: 'Bookmark added successfully',
+      bookmark: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error adding bookmark:', error);
+    res.status(500).json({ 
+      error: 'Failed to add bookmark',
+      message: error.message
+    });
+  }
+});
+
+// Update a bookmark
+app.put('/api/bookmarks/:id', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const bookmarkId = parseInt(req.params.id, 10);
+    if (isNaN(bookmarkId)) {
+      return res.status(400).json({ 
+        error: 'Invalid bookmark ID',
+        details: 'Bookmark ID must be a valid integer'
+      });
+    }
+
+    const { title, url, category_id, color } = req.body;
+
+    if (!title || !url || !category_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Convert category_id to integer
+    const categoryIdInt = parseInt(category_id, 10);
+    if (isNaN(categoryIdInt)) {
+      return res.status(400).json({ 
+        error: 'Invalid category ID',
+        details: 'Category ID must be a valid integer'
+      });
+    }
+
+    // Verify bookmark belongs to user
+    const bookmarkCheck = await pool.query(
+      'SELECT id FROM deuss.bookmarks WHERE id = $1 AND user_id = $2',
+      [bookmarkId, userId]
+    );
+
+    if (bookmarkCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Bookmark not found or does not belong to user' });
+    }
+
+    // Verify category belongs to user
+    const categoryCheck = await pool.query(
+      'SELECT id FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+      [categoryIdInt, userId]
+    );
+
+    if (categoryCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Category not found or does not belong to user' });
+    }
+
+    // Update the bookmark
+    const result = await pool.query(
+      'UPDATE deuss.bookmarks SET title = $1, url = $2, category_id = $3, color = $4, updated_at = NOW() WHERE id = $5 AND user_id = $6 RETURNING *',
+      [title, url, categoryIdInt, color, bookmarkId, userId]
+    );
+
+    res.json({
+      message: 'Bookmark updated successfully',
+      bookmark: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error updating bookmark:', error);
+    res.status(500).json({ 
+      error: 'Failed to update bookmark',
+      message: error.message
+    });
+  }
+});
+
+// Delete a bookmark
+app.delete('/api/bookmarks/:id', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const bookmarkId = parseInt(req.params.id, 10);
+    if (isNaN(bookmarkId)) {
+      return res.status(400).json({ 
+        error: 'Invalid bookmark ID',
+        details: 'Bookmark ID must be a valid integer'
+      });
+    }
+
+    // Verify bookmark belongs to user
+    const bookmarkCheck = await pool.query(
+      'SELECT id FROM deuss.bookmarks WHERE id = $1 AND user_id = $2',
+      [bookmarkId, userId]
+    );
+
+    if (bookmarkCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Bookmark not found or does not belong to user' });
+    }
+
+    // Delete the bookmark
+    await pool.query(
+      'DELETE FROM deuss.bookmarks WHERE id = $1 AND user_id = $2',
+      [bookmarkId, userId]
+    );
+
+    res.json({ message: 'Bookmark deleted successfully' });
+
+  } catch (error) {
+    console.error('Error deleting bookmark:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete bookmark',
+      message: error.message 
+    });
+  }
+});
+
+// Add a new bookmark category
+app.post('/api/bookmarks/category', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { name, icon, id } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+
+    // Check if this is an update or new category
+    if (id) {
+      // Check if this looks like a temporary timestamp-based ID from the frontend
+      // Timestamp IDs are usually 13+ digits, which is too large for PostgreSQL INT
+      if (String(id).length > 10) {
+        // Create a new category instead of trying to update a non-existent one
+        const result = await pool.query(
+          'INSERT INTO deuss.bookmark_categories (user_id, name, icon, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING *',
+          [userId, name, icon || 'wrench']
+        );
+
+        return res.status(201).json({
+          message: 'Category created successfully',
+          category: result.rows[0]
+        });
+      }
+      
+      // Try to safely convert ID to integer
+      let categoryId;
+      try {
+        categoryId = parseInt(id, 10);
+        if (isNaN(categoryId) || categoryId <= 0 || categoryId > 2147483647) { // Max PostgreSQL INT value
+          throw new Error('ID out of range');
+        }
+      } catch (error) {
+        return res.status(400).json({ 
+          error: 'Invalid category ID',
+          details: 'Category ID must be a valid integer within PostgreSQL range'
+        });
+      }
+
+      // Verify the category belongs to the user
+      const categoryCheck = await pool.query(
+        'SELECT id FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+        [categoryId, userId]
+      );
+
+      if (categoryCheck.rows.length === 0) {
+        return res.status(404).json({ error: 'Category not found or does not belong to user' });
+      }
+
+      // Update existing category
+      const result = await pool.query(
+        'UPDATE deuss.bookmark_categories SET name = $1, icon = $2, updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *',
+        [name, icon || 'wrench', categoryId, userId]
+      );
+
+      return res.json({
+        message: 'Category updated successfully',
+        category: result.rows[0]
+      });
+    } else {
+      // Create new category
+      const result = await pool.query(
+        'INSERT INTO deuss.bookmark_categories (user_id, name, icon, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING *',
+        [userId, name, icon || 'wrench']
+      );
+
+      return res.status(201).json({
+        message: 'Category created successfully',
+        category: result.rows[0]
+      });
+    }
+  } catch (error) {
+    console.error('Error managing bookmark category:', error);
+    res.status(500).json({ 
+      error: 'Failed to manage bookmark category',
+      message: error.message
+    });
+  }
+});
+
+// Delete a bookmark category
+app.delete('/api/bookmarks/category/:id', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const categoryId = parseInt(req.params.id, 10);
+    if (isNaN(categoryId)) {
+      return res.status(400).json({ 
+        error: 'Invalid category ID',
+        details: 'Category ID must be a valid integer'
+      });
+    }
+
+    // Verify the category belongs to the user
+    const categoryCheck = await pool.query(
+      'SELECT id FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+      [categoryId, userId]
+    );
+
+    if (categoryCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Category not found or does not belong to user' });
+    }
+
+    // Delete the category (and its bookmarks due to ON DELETE CASCADE)
+    await pool.query(
+      'DELETE FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+      [categoryId, userId]
+    );
+
+    res.json({ message: 'Category and all its bookmarks deleted successfully' });
+
+  } catch (error) {
+    console.error('Error deleting bookmark category:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete bookmark category',
+      message: error.message
+    });
+  }
+});
+
+// Function to add default bookmarks for a user
+async function addDefaultBookmarksForUser(userId) {
+  const client = await pool.connect();
+  
+  try {
+    // Start transaction
+    await client.query('BEGIN');
+    
+    // Get all default categories
+    const defaultCategoriesResult = await client.query(
+      'SELECT * FROM deuss.default_bookmark_categories'
+    );
+    
+    // For each default category
+    for (const defaultCategory of defaultCategoriesResult.rows) {
+      // Create category for user
+      const categoryResult = await client.query(
+        'INSERT INTO deuss.bookmark_categories (user_id, name, icon) VALUES ($1, $2, $3) RETURNING id',
+        [userId, defaultCategory.name, defaultCategory.icon]
+      );
+      
+      const categoryId = categoryResult.rows[0].id;
+      
+      // Get bookmarks for this category
+      const bookmarksResult = await client.query(
+        'SELECT * FROM deuss.default_bookmarks WHERE category_id = $1',
+        [defaultCategory.id]
+      );
+      
+      // Add each bookmark
+      for (const bookmark of bookmarksResult.rows) {
+        await client.query(
+          'INSERT INTO deuss.bookmarks (user_id, category_id, title, url, color, icon) VALUES ($1, $2, $3, $4, $5, $6)',
+          [userId, categoryId, bookmark.title, bookmark.url, bookmark.color, bookmark.icon]
+        );
+      }
+    }
+    
+    // Mark that default bookmarks have been added for this user
+    await client.query(
+      'UPDATE deuss.users SET default_bookmarks_added = true WHERE id = $1',
+      [userId]
+    );
+    
+    // Commit transaction
+    await client.query('COMMIT');
+    
+  } catch (error) {
+    // Rollback in case of error
+    await client.query('ROLLBACK');
+    console.error('Error adding default bookmarks for user:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 app.get('/api/auth/session', async (req, res) => {
   // Check if JWT token is in the Authorization header as fallback
   let userId = null;
@@ -710,7 +1098,6 @@ app.get('/api/auth/session', async (req, res) => {
       tokenUser = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
       if (tokenUser && tokenUser.id) {
         userId = tokenUser.id;
-        console.log(`Found valid JWT token for user ${userId}`);
       }
     } catch (error) {
       console.error('Invalid JWT token in authorization header:', error);
@@ -723,11 +1110,6 @@ app.get('/api/auth/session', async (req, res) => {
   if (req.session && req.session.uid) {
     userId = userId || req.session.uid;
     isSessionValid = true;
-    console.log(`Found valid session for user ${userId}`);
-  } else if (req.session) {
-    console.log('Session object exists but no user ID found');
-  } else {
-    console.log('No session object available');
   }
   
   // If we don't have a user ID from either source, return not authenticated
@@ -742,7 +1124,7 @@ app.get('/api/auth/session', async (req, res) => {
   try {
     // Only fetch essential user data
     const result = await pool.query(
-      'SELECT id, email, full_name, avatar_url, tier, is_verified FROM sigh_ai.users WHERE id = $1',
+      'SELECT id, email, full_name, avatar_url, tier, is_verified FROM deuss.users WHERE id = $1',
       [userId]
     );
 
@@ -776,7 +1158,6 @@ app.get('/api/auth/session', async (req, res) => {
     if (req.session) {
       if (typeof req.session.touch === 'function') {
         req.session.touch();
-        console.log('Extended session expiration');
       }
       
       // Ensure user ID is in session
@@ -785,7 +1166,6 @@ app.get('/api/auth/session', async (req, res) => {
         if (typeof req.session.save === 'function') {
           req.session.save();
         }
-        console.log('Created new session from JWT authentication');
       }
     }
     
@@ -824,7 +1204,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id FROM sigh_ai.users WHERE email = $1',
+      'SELECT id FROM deuss.users WHERE email = $1',
       [email]
     );
 
@@ -837,7 +1217,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour
 
     await pool.query(
-      'UPDATE sigh_ai.users SET reset_token = $1, reset_token_expiry = $2 WHERE id = $3',
+      'UPDATE deuss.users SET reset_token = $1, reset_token_expiry = $2 WHERE id = $3',
       [resetToken, resetTokenExpiry, result.rows[0].id]
     );
 
@@ -892,7 +1272,7 @@ app.get('/api/notes', async (req, res) => {
   
   try {
     const result = await pool.query(
-      'SELECT * FROM sigh_ai.notes WHERE user_id = $1 ORDER BY updated_at DESC',
+      'SELECT * FROM deuss.notes WHERE user_id = $1 ORDER BY updated_at DESC',
       [userId]
     );
     
@@ -908,7 +1288,18 @@ app.get('/api/notes', async (req, res) => {
 });
 
 app.post('/api/notes', loginRequired, async (req, res) => {
-  const userId = req.session?.uid;
+  // Get user ID from either session or JWT token
+  let userId = null;
+  
+  // Try session first
+  if (req.session?.uid) {
+    userId = req.session.uid;
+  } 
+  // Then try JWT user object
+  else if (req.user?.id) {
+    userId = req.user.id;
+  }
+  
   if (!userId) {
     return res.status(401).json({ error: 'User not authenticated' });
   }
@@ -923,7 +1314,7 @@ app.post('/api/notes', loginRequired, async (req, res) => {
     if (id) {
       // Update existing note
       await pool.query(
-        'UPDATE sigh_ai.notes SET content = $1, title = $2, updated_at = NOW(), tags = $3 WHERE id = $4 AND user_id = $5',
+        'UPDATE deuss.notes SET content = $1, title = $2, updated_at = NOW(), tags = $3 WHERE id = $4 AND user_id = $5',
         [content, title || '', tags || [], id, userId]
       );
       
@@ -934,7 +1325,7 @@ app.post('/api/notes', loginRequired, async (req, res) => {
     } else {
       // Create new note
       const result = await pool.query(
-        'INSERT INTO sigh_ai.notes (user_id, content, title, tags, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id',
+        'INSERT INTO deuss.notes (user_id, content, title, tags, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING id',
         [userId, content, title || '', tags || []]
       );
       
@@ -959,7 +1350,7 @@ app.delete('/api/notes/:id', loginRequired, async (req, res) => {
   
   try {
     const result = await pool.query(
-      'DELETE FROM sigh_ai.notes WHERE id = $1 AND user_id = $2 RETURNING id',
+      'DELETE FROM deuss.notes WHERE id = $1 AND user_id = $2 RETURNING id',
       [noteId, userId]
     );
     
@@ -993,10 +1384,8 @@ app.get('/api/hacking-profiles', loginRequired, async (req, res) => {
   }
   
   try {
-    console.log(`Fetching hacking profiles for user ${userId}`);
-    
     const result = await pool.query(
-      'SELECT * FROM sigh_ai.hacking_profiles WHERE user_id = $1',
+      'SELECT * FROM deuss.hacking_profiles WHERE user_id = $1',
       [userId]
     );
     
@@ -1031,13 +1420,11 @@ app.post('/api/connect-platform', loginRequired, async (req, res) => {
   }
   
   try {
-    console.log(`Connecting ${platform} for user ${userId} with username: ${username}`);
-    
     // For TryHackMe, ensure apiKey is null
     const profileApiKey = platform === 'tryhackme' ? null : apiKey;
     
     const result = await pool.query(
-      `INSERT INTO sigh_ai.hacking_profiles (user_id, platform, username, api_key, connected, created_at, updated_at)
+      `INSERT INTO deuss.hacking_profiles (user_id, platform, username, api_key, connected, created_at, updated_at)
        VALUES ($1, $2, $3, $4, true, NOW(), NOW())
        ON CONFLICT (user_id, platform) 
        DO UPDATE SET 
@@ -1083,10 +1470,8 @@ app.post('/api/disconnect-platform', loginRequired, async (req, res) => {
   }
   
   try {
-    console.log(`Disconnecting ${platform} for user ${userId}`);
-    
     const result = await pool.query(
-      'UPDATE sigh_ai.hacking_profiles SET connected = false, updated_at = NOW() WHERE user_id = $1 AND platform = $2 RETURNING *',
+      'UPDATE deuss.hacking_profiles SET connected = false, updated_at = NOW() WHERE user_id = $1 AND platform = $2 RETURNING *',
       [userId, platform]
     );
     
@@ -1123,10 +1508,8 @@ app.get('/api/social-profiles', loginRequired, async (req, res) => {
   }
   
   try {
-    console.log(`Fetching social profiles for user ${userId}`);
-    
     const result = await pool.query(
-      'SELECT * FROM sigh_ai.social_profiles WHERE user_id = $1',
+      'SELECT * FROM deuss.social_profiles WHERE user_id = $1',
       [userId]
     );
     
@@ -1192,17 +1575,15 @@ app.post('/api/connect-social', loginRequired, async (req, res) => {
     // Normalize the platform name (convert 'x' to 'twitter')
     const normalizedPlatform = platform === 'x' ? 'twitter' : platform;
     
-    console.log(`Connecting ${normalizedPlatform} for user ${userId} with username: ${username}`);
-    
     // Log API key information for debugging
     if (apiKey) {
-      console.log(`API key provided for ${normalizedPlatform}: ${apiKey.substring(0, 5)}...`);
+      // API key provided
     } else {
-      console.log(`No API key provided for ${normalizedPlatform}`);
+      // No API key provided
     }
     
     const result = await pool.query(
-      `INSERT INTO sigh_ai.social_profiles (user_id, platform, username, url, api_key, connected, created_at, updated_at)
+      `INSERT INTO deuss.social_profiles (user_id, platform, username, url, api_key, connected, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())
        ON CONFLICT (user_id, platform) 
        DO UPDATE SET 
@@ -1230,8 +1611,6 @@ app.post('/api/connect-social', loginRequired, async (req, res) => {
             }
           }
         );
-        
-        console.log(`Successfully validated Twitter API key for ${username}`);
         
         res.json({ 
           message: `Connected to ${normalizedPlatform}`,
@@ -1286,10 +1665,8 @@ app.post('/api/disconnect-social', loginRequired, async (req, res) => {
   }
   
   try {
-    console.log(`Disconnecting ${platform} for user ${userId}`);
-    
     const result = await pool.query(
-      'UPDATE sigh_ai.social_profiles SET connected = false, updated_at = NOW() WHERE user_id = $1 AND platform = $2 RETURNING *',
+      'UPDATE deuss.social_profiles SET connected = false, updated_at = NOW() WHERE user_id = $1 AND platform = $2 RETURNING *',
       [userId, platform]
     );
     
@@ -1464,7 +1841,7 @@ async function getTwitterApiKey(username) {
     
     // First try: Look up by provided username directly
     const profileByUsernameResult = await pool.query(
-      'SELECT api_key FROM sigh_ai.social_profiles WHERE platform = $1 AND username = $2 AND connected = true',
+      'SELECT api_key FROM deuss.social_profiles WHERE platform = $1 AND username = $2 AND connected = true',
       ['twitter', cleanUsername]
     );
     
@@ -1528,7 +1905,6 @@ app.get('/api/twitter-profile', async (req, res) => {
     const cacheKey = username.toLowerCase();
     const cachedProfile = twitterCache.profiles.get(cacheKey);
     if (cachedProfile && cachedProfile.timestamp > Date.now() - PROFILE_CACHE_TTL) {
-      console.log(`Using cached Twitter profile for ${username}`);
       return res.json(cachedProfile.data);
     }
 
@@ -1539,7 +1915,6 @@ app.get('/api/twitter-profile', async (req, res) => {
     }
 
     // Make request to Twitter API
-    console.log(`Found Twitter API key for ${username} by username lookup`);
     const twitterResponse = await fetch(
       `https://api.twitter.com/2/users/by/username/${username}?user.fields=description,profile_image_url,public_metrics,verified`,
       {
@@ -1558,11 +1933,8 @@ app.get('/api/twitter-profile', async (req, res) => {
     }
     
     if (twitterResponse.status === 429) {
-      console.log(`Twitter API rate limit exceeded for ${username}`);
-      
       // If we have a cached version (even if expired), return it
       if (cachedProfile) {
-        console.log(`Returning expired cached profile for ${username} due to rate limiting`);
         return res.status(200).json(cachedProfile.data);
       }
       
@@ -1589,7 +1961,6 @@ app.get('/api/twitter-profile', async (req, res) => {
     }
 
     const twitterData = await twitterResponse.json();
-    console.log(`Successfully fetched Twitter data for ${username}`);
     
     // Cache the successful response
     twitterCache.profiles.set(cacheKey, {
@@ -1615,7 +1986,6 @@ app.get('/api/twitter-tweets', async (req, res) => {
     const cacheKey = username.toLowerCase();
     const cachedTweets = twitterCache.tweets.get(cacheKey);
     if (cachedTweets && cachedTweets.timestamp > Date.now() - TWEETS_CACHE_TTL) {
-      console.log(`Using cached Twitter tweets for ${username}`);
       return res.json(cachedTweets.data);
     }
 
@@ -1637,18 +2007,14 @@ app.get('/api/twitter-tweets', async (req, res) => {
 
     // Handle user lookup errors
     if (userResponse.status === 429) {
-      console.log(`Twitter API rate limit exceeded for user lookup: ${username}`);
-      
       // If we have a cached version (even if expired), return it
       if (cachedTweets) {
-        console.log(`Returning expired cached tweets for ${username} due to rate limiting`);
         return res.json(cachedTweets.data);
       }
       
       // Check if the user is verified before returning mock tweets
       const isVerified = await isTwitterUserVerified(username, apiKey);
       if (isVerified) {
-        console.log(`Not generating mock tweets for verified user: ${username}`);
         return res.status(429).json({ 
           error: 'Twitter API rate limit exceeded', 
           message: 'Rate limit exceeded for verified user, please try again later.',
@@ -1686,7 +2052,6 @@ app.get('/api/twitter-tweets', async (req, res) => {
     
     // Check if user has 0 tweets
     if (userData.data.public_metrics && userData.data.public_metrics.tweet_count === 0) {
-      console.log(`User ${username} has 0 tweets, returning empty data array`);
       const emptyResponse = {
         data: [],
         meta: {
@@ -1715,17 +2080,13 @@ app.get('/api/twitter-tweets', async (req, res) => {
 
     // Handle tweets lookup errors
     if (tweetsResponse.status === 429) {
-      console.log(`Twitter API rate limit exceeded for tweets lookup: ${username}`);
-      
       // If we have a cached version (even if expired), return it
       if (cachedTweets) {
-        console.log(`Returning expired cached tweets for ${username} due to rate limiting`);
         return res.json(cachedTweets.data);
       }
       
       // For verified users, don't return mock tweets
       if (isVerified) {
-        console.log(`Not generating mock tweets for verified user: ${username}`);
         return res.status(429).json({ 
           error: 'Twitter API rate limit exceeded', 
           message: 'Rate limit exceeded for verified user, please try again later.',
@@ -1758,7 +2119,6 @@ app.get('/api/twitter-tweets', async (req, res) => {
     }
 
     const tweetsData = await tweetsResponse.json();
-    console.log(`Successfully fetched ${tweetsData.meta?.result_count || 0} tweets for ${username}`);
     
     // Cache the successful response
     twitterCache.tweets.set(cacheKey, {
@@ -1780,7 +2140,7 @@ app.use((err, req, res, next) => {
     switch (err.code) {
       case '42P01': // undefined_table
         console.warn('Table not found error:', err.message);
-        if (err.message.includes('sigh_ai.sigh_ai.session')) {
+        if (err.message.includes('deuss.deuss.session')) {
           console.error('Session table name is incorrectly double-qualified. Check session store configuration.');
         }
         return next(); // Continue processing the request
@@ -1840,8 +2200,17 @@ app.listen(PORT, () => {
 app.use((req, res, next) => {
   // Only log if debugging is enabled
   if (process.env.DEBUG_SESSION === 'true') {
-    console.log('Session ID:', req.sessionID);
-    console.log('Session data:', req.session);
+    // Session ID
+    // Session data
   }
   next();
 });
+
+// AWS Lambda handler
+exports.handler = async (event, context) => {
+  // Serverless Express adapter
+  const serverlessExpress = require('serverless-express');
+  const handler = serverlessExpress({ app });
+  
+  return handler(event, context);
+};
