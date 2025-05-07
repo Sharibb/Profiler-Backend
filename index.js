@@ -136,7 +136,7 @@ app.use(cors({
       // In production, check against production domains
       const prodOrigins = [
         'https://deuss.space',
-        'https://profiler.deuss.space',
+        'https://homepage.deuss.space',
       ];
       
       // Check if origin matches any production domains
