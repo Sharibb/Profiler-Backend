@@ -120,16 +120,7 @@ const PORT = process.env.PORT || 3000;
 
 // Update allowed origins to ensure frontend domains are properly included
 const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3002',
-  'http://localhost:3003',
-  'http://localhost:3004',
-  'http://localhost:3005',
-  'http://localhost:3006',
-  // Include more origins as needed
-  'http://127.0.0.1:3000',
-  'http://127.0.0.1:3001',
+  '*'
 ];
 
 // Improve CORS configuration to better handle cookies
@@ -144,10 +135,8 @@ app.use(cors({
     if (process.env.NODE_ENV === 'production') {
       // In production, check against production domains
       const prodOrigins = [
-        '.sigh-ai.com', 
-        'https://www.sigh-ai.com', 
-        'https://chat.sigh-ai.com', 
-        'https://www.chat.sigh-ai.com'
+        'https://deuss.space',
+        'https://profiler.deuss.space',
       ];
       
       // Check if origin matches any production domains
@@ -163,7 +152,7 @@ app.use(cors({
       }
     } else {
       // In development, allow all localhost origins
-      if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+      if (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1:')) {
         return callback(null, true);
       } else {
         console.warn(`CORS blocked request from ${origin}`);
