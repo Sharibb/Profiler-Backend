@@ -306,6 +306,52 @@ async function addDefaultBookmarksColumn() {
 }
 
 /**
+ * Add country column to users table
+ */
+async function addCountryColumn() {
+  const client = await pool.connect();
+  
+  try {
+    console.log('Checking for country column in users table...');
+    
+    // Check if country column exists in users table
+    const columnCheckResult = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'DEUSS' 
+      AND table_name = 'users' 
+      AND column_name = 'country'
+    `);
+    
+    if (columnCheckResult.rows.length === 0) {
+      console.log('Adding missing country column to users table');
+      
+      await client.query('BEGIN');
+      
+      // Add the missing column
+      await client.query(`
+        ALTER TABLE DEUSS.users
+        ADD COLUMN country VARCHAR(100)
+      `);
+      
+      await client.query('COMMIT');
+      
+      console.log('Country column added successfully');
+    } else {
+      console.log('Column country already exists in users table');
+    }
+    
+  } catch (error) {
+    // Roll back the transaction in case of error
+    await client.query('ROLLBACK');
+    console.error('Error updating database schema:', error);
+  } finally {
+    // Release the client back to the pool
+    client.release();
+  }
+}
+
+/**
  * Populate default bookmarks in the database
  */
 async function populateDefaultBookmarks() {
@@ -366,12 +412,13 @@ async function manageSchema(options = {}) {
       addApiKey = false,
       addTags = false,
       addDefaultBookmarks = false,
+      addCountry = false,
       populateBookmarks = false,
       runAll = false
     } = options;
     
     // If no specific options are provided, show help
-    if (!fullSetup && !addApiKey && !addTags && !addDefaultBookmarks && !populateBookmarks && !runAll) {
+    if (!fullSetup && !addApiKey && !addTags && !addDefaultBookmarks && !addCountry && !populateBookmarks && !runAll) {
       console.log(`
 Schema Manager - Usage:
 -----------------------
@@ -379,6 +426,7 @@ node schema-manager.js --full-setup       # Run complete schema setup from scrat
 node schema-manager.js --add-api-key      # Add API key column to social_profiles table
 node schema-manager.js --add-tags         # Add tags column to notes table
 node schema-manager.js --add-bookmarks    # Add default_bookmarks_added column to users table
+node schema-manager.js --add-country      # Add country column to users table
 node schema-manager.js --populate         # Populate default bookmarks
 node schema-manager.js --all              # Run all updates
       `);
@@ -405,6 +453,11 @@ node schema-manager.js --all              # Run all updates
       await addDefaultBookmarksColumn();
     }
     
+    if (addCountry || runAll) {
+      console.log('\n=== Adding Country Column ===');
+      await addCountryColumn();
+    }
+    
     if (populateBookmarks || runAll) {
       console.log('\n=== Populating Default Bookmarks ===');
       await populateDefaultBookmarks();
@@ -428,6 +481,7 @@ const options = {
   addApiKey: args.includes('--add-api-key'),
   addTags: args.includes('--add-tags'),
   addDefaultBookmarks: args.includes('--add-bookmarks'),
+  addCountry: args.includes('--add-country'),
   populateBookmarks: args.includes('--populate'),
   runAll: args.includes('--all')
 };

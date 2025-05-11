@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS DEUSS.users (
   reset_token VARCHAR(255),
   reset_token_expiry TIMESTAMP,
   default_bookmarks_added BOOLEAN DEFAULT false,
+  country VARCHAR(100),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

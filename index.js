@@ -884,7 +884,7 @@ app.delete('/api/bookmarks/:id', loginRequired, async (req, res) => {
     console.error('Error deleting bookmark:', error);
     res.status(500).json({ 
       error: 'Failed to delete bookmark',
-      message: error.message 
+      message: error.message
     });
   }
 });
@@ -918,44 +918,68 @@ app.post('/api/bookmarks/category', loginRequired, async (req, res) => {
           message: 'Category created successfully',
           category: result.rows[0]
         });
-      }
-      
-      // Try to safely convert ID to integer
-      let categoryId;
-      try {
-        categoryId = parseInt(id, 10);
-        if (isNaN(categoryId) || categoryId <= 0 || categoryId > 2147483647) { // Max PostgreSQL INT value
-          throw new Error('ID out of range');
+      } else {
+        // Attempt to update an existing category
+        // First, verify the category belongs to this user
+        const existingCategory = await pool.query(
+          'SELECT * FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+          [id, userId]
+        );
+
+        if (existingCategory.rows.length === 0) {
+          return res.status(404).json({ error: 'Category not found' });
         }
-      } catch (error) {
-        return res.status(400).json({ 
-          error: 'Invalid category ID',
-          details: 'Category ID must be a valid integer within PostgreSQL range'
+
+        // Update the category
+        const result = await pool.query(
+          'UPDATE deuss.bookmark_categories SET name = $1, icon = $2, updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *',
+          [name, icon || 'wrench', id, userId]
+        );
+
+        return res.status(200).json({
+          message: 'Category updated successfully',
+          category: result.rows[0]
         });
       }
+    }
 
-      // Verify the category belongs to the user
-      const categoryCheck = await pool.query(
-        'SELECT id FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
-        [categoryId, userId]
-      );
+    // Create a new category
+    const result = await pool.query(
+      'INSERT INTO deuss.bookmark_categories (user_id, name, icon, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING *',
+      [userId, name, icon || 'wrench']
+    );
 
-      if (categoryCheck.rows.length === 0) {
-        return res.status(404).json({ error: 'Category not found or does not belong to user' });
-      }
+    res.status(201).json({
+      message: 'Category created successfully',
+      category: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error creating bookmark category:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
-      // Update existing category
-      const result = await pool.query(
-        'UPDATE deuss.bookmark_categories SET name = $1, icon = $2, updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *',
-        [name, icon || 'wrench', categoryId, userId]
-      );
+// Add a PUT endpoint for updating bookmark categories
+app.put('/api/bookmarks/category', loginRequired, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
 
-      return res.json({
-        message: 'Category updated successfully',
-        category: result.rows[0]
-      });
-    } else {
-      // Create new category
+    const { id, name, icon } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ error: 'Category ID is required' });
+    }
+
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+
+    // Check if this is a temporary ID
+    if (String(id).length > 10) {
+      // Create a new category instead of trying to update a non-existent one
       const result = await pool.query(
         'INSERT INTO deuss.bookmark_categories (user_id, name, icon, created_at, updated_at) VALUES ($1, $2, $3, NOW(), NOW()) RETURNING *',
         [userId, name, icon || 'wrench']
@@ -966,12 +990,30 @@ app.post('/api/bookmarks/category', loginRequired, async (req, res) => {
         category: result.rows[0]
       });
     }
-  } catch (error) {
-    console.error('Error managing bookmark category:', error);
-    res.status(500).json({ 
-      error: 'Failed to manage bookmark category',
-      message: error.message
+
+    // Verify the category exists and belongs to this user
+    const existingCategory = await pool.query(
+      'SELECT * FROM deuss.bookmark_categories WHERE id = $1 AND user_id = $2',
+      [id, userId]
+    );
+
+    if (existingCategory.rows.length === 0) {
+      return res.status(404).json({ error: 'Category not found or does not belong to you' });
+    }
+
+    // Update the category
+    const result = await pool.query(
+      'UPDATE deuss.bookmark_categories SET name = $1, icon = $2, updated_at = NOW() WHERE id = $3 AND user_id = $4 RETURNING *',
+      [name, icon || 'wrench', id, userId]
+    );
+
+    res.status(200).json({
+      message: 'Category updated successfully',
+      category: result.rows[0]
     });
+  } catch (error) {
+    console.error('Error updating bookmark category:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -1013,6 +1055,69 @@ app.delete('/api/bookmarks/category/:id', loginRequired, async (req, res) => {
     console.error('Error deleting bookmark category:', error);
     res.status(500).json({ 
       error: 'Failed to delete bookmark category',
+      message: error.message
+    });
+  }
+});
+
+// Account Routes
+app.post('/api/account', loginRequired, async (req, res) => {
+  try {
+    // Get user ID from either session or JWT token
+    let userId = null;
+    
+    // Try session first
+    if (req.session?.uid) {
+      userId = req.session.uid;
+    } 
+    // Then try JWT user object
+    else if (req.user?.id) {
+      userId = req.user.id;
+    }
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    
+    const { full_name, email, country } = req.body;
+    
+    // Validate required fields
+    if (!full_name) {
+      return res.status(400).json({ error: 'Full name is required' });
+    }
+    
+    // Update user profile
+    const result = await pool.query(
+      'UPDATE deuss.users SET full_name = $1, country = $2, updated_at = NOW() WHERE id = $3 RETURNING id, email, full_name, country, avatar_url, tier, is_verified',
+      [full_name, country || null, userId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const updatedUser = result.rows[0];
+    
+    // Format response
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: updatedUser.id,
+        email: updatedUser.email,
+        full_name: updatedUser.full_name,
+        country: updatedUser.country,
+        avatar_url: updatedUser.avatar_url,
+        tier: updatedUser.tier || 'basic',
+        is_verified: updatedUser.is_verified || false,
+        initials: getInitials(updatedUser.full_name)
+      }
+    });
+  } catch (error) {
+    console.error('Error updating profile:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to update profile',
       message: error.message
     });
   }
